@@ -1,0 +1,59 @@
+=============================================================
+          CUSTOMER CHURN PREDICTION DASHBOARD
+=============================================================
+
+1. PROJECT OVERVIEW
+-------------------
+This project is a fully self-contained, client-side web application designed to predict customer churn (when a customer is likely to cancel their subscription or service). 
+Unlike traditional Machine Learning applications that require a heavy backend (like Python, Flask, or a database), this dashboard performs all data processing, model training, and visualization directly within the user's browser using Vanilla JavaScript.
+
+2. HOW IT WORKS
+---------------
+The workflow is strictly browser-based and operates in the following steps:
+1. Data Upload: The user uploads a CSV file containing customer data.
+2. Parsing & Preprocessing: 
+   - PapaParse reads the CSV file rapidly.
+   - A custom `robustPreprocess` JavaScript function cleans the data. It automatically detects the target column (e.g., 'churn' or 'target'), ignores ID columns (like 'customerID'), dynamically encodes categorical text (like 'Contract' or 'InternetService') into numbers, and safely handles missing or empty numerical values (e.g., mapping blank 'tenure' fields to 0).
+3. Model Training: 
+   - The data is split into an 80% Training set and a 20% Testing set.
+   - A custom-built Random Forest Classifier (composed of multiple Decision Trees) is trained on the fly using the training data.
+4. Evaluation & Visualization:
+   - The model predicts the outcomes on the 20% test set.
+   - The results are visualized instantly across an 8-panel grid dashboard using Chart.js.
+
+3. WHAT THE DATASET CONTAINS
+----------------------------
+The dashboard accepts CSV files. Using the included `generate_dataset.ps1` script, an example synthetic telecom dataset is generated. Typical fields include:
+
+- customerID: Unique identifier for the customer (Automatically ignored by the model).
+- tenure: Number of months the customer has stayed with the company.
+- monthlyCharges: The amount charged to the customer monthly.
+- totalCharges: The total amount charged to the customer over time.
+- contract: The contract term (e.g., 'Month-to-month', 'One year', 'Two year').
+- internetService: Client's internet service provider (e.g., 'DSL', 'Fiber optic', 'No').
+- churn (Target Variable): Whether the customer churned or not ('Yes'/'No', 1/0, or 'True'/'False').
+
+*Note: The model is robust and can adapt to other similarly structured tabular datasets, provided they have a target column indicating a binary outcome.*
+
+4. THE DASHBOARD PANELS
+-----------------------
+The UI is built on a responsive CSS Grid with a clean, corporate light theme. It features 8 distinct analytical panels:
+
+1. Model Accuracy: Displays overall Accuracy, Precision, Recall, and F1-Score with a doughnut chart.
+2. Confusion Matrix: A matrix mapping True Positives, True Negatives, False Positives, and False Negatives to show where the model excels or makes mistakes.
+3. ROC Curve: A line chart graphing the True Positive Rate against the False Positive Rate, calculating the Area Under the Curve (AUC).
+4. Feature Importance: A bar chart detailing which columns in the dataset had the highest impact on the model's decision-making (e.g., Tenure or Contract length).
+5. Churn Prediction Distribution: A doughnut chart mapping the overall split between predicted churners and retained customers.
+6. Actual vs Predicted: A bar chart comparing the real churn numbers from the test set against the model's predictions.
+7. Top 10 High Risk Customers: A dynamically populated table identifying the specific rows/customers who carry the highest churn probability.
+8. Churn Probability Distribution: A histogram showing confidence bins (e.g., how many customers have a 0.8 to 1.0 probability of churning).
+
+5. TECHNOLOGY STACK
+-------------------
+- Frontend: HTML5, CSS3 (CSS Grid for layout)
+- Logic & ML Engine: Vanilla JavaScript (Custom Random Forest & Decision Tree classes)
+- Data Parsing: PapaParse (v5.4.1)
+- Charting: Chart.js (v4.4.0)
+- Mock Data Generation: Windows PowerShell (generate_dataset.ps1)
+
+There are no external servers, API keys, or databases required. All data privacy is maintained locally on the user's machine.
