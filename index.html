@@ -312,195 +312,6 @@
     </div> <!-- End Grid -->
 
 <script>
-// ML Classes logic remains identical but UI binding reflects the light theme structure.
-class DecisionTree {
-    constructor(maxDepth=8, minSamples=5, maxFeatures=null) {
-        this.maxDepth = maxDepth;
-        this.minSamples = minSamples;
-        this.maxFeatures = maxFeatures;
-        this.importances = null;
-        this.tree = null;
-    }
-    fit(X, y, nFeatures) {
-        this.importances = new Float32Array(nFeatures);
-        this.tree = this._buildTree(X, y, 0);
-    }
-    _buildTree(X, y, depth) {
-        const n = y.length;
-        let sum1 = 0;
-        for(let i=0; i<n; i++) sum1 += y[i];
-        const p1 = sum1 / n;
-        if (depth >= this.maxDepth || n < this.minSamples || sum1 === 0 || sum1 === n) {
-            return { p1, isLeaf: true };
-        }
-        const nCols = X[0].length;
-        const mFeats = this.maxFeatures || Math.max(1, Math.floor(Math.sqrt(nCols)));
-        const feats = Array.from({length: nCols}, (_, i) => i).sort(() => Math.random() - 0.5).slice(0, mFeats);
-        let bestGini = Infinity, bestSplit = null;
-        const baseGini = 1 - (p1*p1 + (1-p1)*(1-p1));
-
-        for (let f of feats) {
-            let vals = new Float32Array(n);
-            for(let i=0; i<n; i++) vals[i] = X[i][f];
-            vals.sort();
-            const thresholds = new Set();
-            for(let i=1; i<n; i++) if (vals[i] !== vals[i-1]) thresholds.add((vals[i] + vals[i-1]) / 2);
-
-            for (let th of thresholds) {
-                let leftCount = 0, left1 = 0, right1 = 0;
-                for(let i=0; i<n; i++) {
-                    if (X[i][f] <= th) { leftCount++; left1 += y[i]; }
-                    else { right1 += y[i]; }
-                }
-                const rightCount = n - leftCount;
-                if (leftCount === 0 || rightCount === 0) continue;
-                const pL1 = left1 / leftCount, pR1 = right1 / rightCount;
-                const giniL = 1 - (pL1*pL1 + (1-pL1)*(1-pL1));
-                const giniR = 1 - (pR1*pR1 + (1-pR1)*(1-pR1));
-                const wGini = (leftCount/n)*giniL + (rightCount/n)*giniR;
-
-                if (wGini < bestGini) {
-                    bestGini = wGini;
-                    bestSplit = { feature: f, threshold: th, leftCount, rightCount, gain: baseGini - wGini };
-                }
-            }
-        }
-
-        if (!bestSplit || bestSplit.gain <= 1e-6) return { p1, isLeaf: true };
-        this.importances[bestSplit.feature] += bestSplit.gain * n;
-
-        const leftX = [], leftY = [], rightX = [], rightY = [];
-        for(let i=0; i<n; i++) {
-            if (X[i][bestSplit.feature] <= bestSplit.threshold) { leftX.push(X[i]); leftY.push(y[i]); }
-            else { rightX.push(X[i]); rightY.push(y[i]); }
-        }
-
-        return {
-            isLeaf: false, p1, feature: bestSplit.feature, threshold: bestSplit.threshold,
-            left: this._buildTree(leftX, leftY, depth+1), right: this._buildTree(rightX, rightY, depth+1)
-        };
-    }
-    predictProbaRow(x) {
-        let node = this.tree;
-        while (!node.isLeaf) {
-            if (x[node.feature] <= node.threshold) node = node.left;
-            else node = node.right;
-        }
-        return node.p1;
-    }
-}
-
-class RandomForest {
-    constructor(nTrees=40, maxDepth=8, minSamples=5) {
-        this.nTrees = nTrees; this.maxDepth = maxDepth; this.minSamples = minSamples;
-        this.trees = []; this.featureImportances = [];
-    }
-    async fit(X, y) {
-        const n = y.length, nFeatures = X[0].length;
-        this.featureImportances = new Float32Array(nFeatures);
-        this.trees = [];
-        for (let t=0; t<this.nTrees; t++) {
-            const bX = [], by = [];
-            for (let i=0; i<n; i++) {
-                const idx = Math.floor(Math.random() * n);
-                bX.push(X[idx]); by.push(y[idx]);
-            }
-            const tree = new DecisionTree(this.maxDepth, this.minSamples);
-            tree.fit(bX, by, nFeatures);
-            this.trees.push(tree);
-            for (let i=0; i<nFeatures; i++) this.featureImportances[i] += tree.importances[i];
-            if (t % 5 === 0) await new Promise(r => setTimeout(r, 0));
-        }
-        let sum = 0;
-        for (let i=0; i<nFeatures; i++) sum += this.featureImportances[i];
-        if (sum > 0) for (let i=0; i<nFeatures; i++) this.featureImportances[i] /= sum;
-    }
-    predictProba(X) {
-        const res = new Float32Array(X.length);
-        for(let i=0; i<X.length; i++) {
-            let s = 0;
-            for(let t=0; t<this.nTrees; t++) s += this.trees[t].predictProbaRow(X[i]);
-            res[i] = s / this.nTrees;
-        }
-        return res;
-    }
-    predict(X) {
-        const prob = this.predictProba(X);
-        const res = new Int8Array(X.length);
-        for(let i=0; i<prob.length; i++) res[i] = prob[i] >= 0.5 ? 1 : 0;
-        return res;
-    }
-}
-
-// Ensure "Tenure" bug doesn't happen by not hardcoding column dependencies.
-function robustPreprocess(rawData) {
-    if(!rawData || !rawData.length) throw new Error("Dataset is empty");
-    const cols = Object.keys(rawData[0]);
-    
-    // Auto-detect target column
-    const targets = ["churn", "churned", "target", "label"];
-    let targetCol = cols.find(c => targets.includes(c.toLowerCase().trim()));
-    if (!targetCol) targetCol = cols[cols.length-1]; // fallback to last col
-    
-    // Exclude IDs
-    const ignore = ["id", "customerid", "customer_id", "userid"];
-    const featNames = cols.filter(c => c !== targetCol && !ignore.includes(c.toLowerCase().trim()));
-    
-    let X = [], y = [];
-    const validIndices = [];
-    const pVals = ["yes", "1", "true", "churn"];
-    const nVals = ["no", "0", "false"];
-
-    // Mapping categoricals
-    const encoders = {};
-    const originalVals = {}; // keep original categorical mapping for table
-    
-    for (let c of featNames) {
-        let isCat = false;
-        for(let i=0; i<Math.min(50, rawData.length); i++) {
-            let v = rawData[i][c];
-            if(v && isNaN(Number(v))) { isCat = true; break; }
-        }
-        if(isCat) {
-            encoders[c] = {}; originalVals[c] = {};
-            let idx = 0;
-            const unique = [...new Set(rawData.map(r => String(r[c]||'').trim()))];
-            unique.forEach(u => {
-                encoders[c][u] = idx;
-                originalVals[c][idx] = u;
-                idx++;
-            });
-        }
-    }
-
-    for (let i=0; i<rawData.length; i++) {
-        const row = rawData[i];
-        let tVal = String(row[targetCol]||'').toLowerCase().trim();
-        let yVal = -1;
-        if (pVals.includes(tVal)) yVal = 1;
-        else if (nVals.includes(tVal)) yVal = 0;
-        else if (!isNaN(Number(tVal)) && (Number(tVal)===1||Number(tVal)===0)) yVal = Number(tVal);
-        
-        if (yVal === -1) continue;
-
-        let rowArr = [];
-        featNames.forEach(c => {
-            let val = row[c];
-            if (encoders[c]) {
-                rowArr.push(encoders[c][String(val||'').trim()] || 0);
-            } else {
-                let nv = Number(val);
-                rowArr.push(isNaN(nv) ? 0 : nv); // safely map NaNs to 0 pre-imputation
-            }
-        });
-        X.push(rowArr);
-        y.push(yVal);
-        validIndices.push(i);
-    }
-    
-    return { X, y, featNames, originalVals, validIndices };
-}
-
 let charts = {};
 // Setup globally styled charts
 Chart.defaults.font.family = "'Segoe UI', Tahoma, sans-serif";
@@ -511,192 +322,174 @@ function drawChart(id, config) {
     charts[id] = new Chart(document.getElementById(id).getContext('2d'), config);
 }
 
-document.getElementById('fileInput').addEventListener('change', (e) => {
-    const file = e.target.files[0];
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+async function processFile(file) {
     if(!file) return;
     
     document.getElementById('errorMsg').innerText = '';
     document.getElementById('loader').style.display = 'block';
+    document.getElementById('dashboard').classList.add('hidden');
     
-    Papa.parse(file, {
-        header: true, skipEmptyLines: true,
-        complete: async function(res) {
-            try {
-                const {X, y, featNames, originalVals, validIndices} = robustPreprocess(res.data);
-                
-                // Shuffle & Split
-                let indices = X.map((_,i)=>i).sort(()=>Math.random()-0.5);
-                let tSize = Math.floor(X.length * 0.2); // 20% test
-                let tInd = indices.slice(0, tSize);
-                let trInd = indices.slice(tSize);
-                
-                let rf = new RandomForest(40, 8, 5);
-                await rf.fit(trInd.map(i=>X[i]), trInd.map(i=>y[i]));
-                
-                let yPred = rf.predict(tInd.map(i=>X[i]));
-                let yProba = rf.predictProba(tInd.map(i=>X[i]));
-                
-                // Calculate stuff
-                let TP=0, TN=0, FP=0, FN=0;
-                let pts = [];
-                for(let i=0; i<tSize; i++) {
-                    let yt = y[tInd[i]];
-                    let yp = yPred[i];
-                    if(yt===1 && yp===1) TP++;
-                    if(yt===0 && yp===0) TN++;
-                    if(yt===0 && yp===1) FP++;
-                    if(yt===1 && yp===0) FN++;
-                    pts.push({ t: yt, p: yProba[i] });
-                }
-                
-                let acc = (TP+TN)/tSize;
-                let prec = TP/(TP+FP)||0;
-                let rec = TP/(TP+FN)||0;
-                let f1 = 2*(prec*rec)/(prec+rec)||0;
-                
-                // Print Acc panel
-                document.getElementById('tAcc').innerText = (acc*100).toFixed(2)+'%';
-                document.getElementById('tPrec').innerText = (prec*100).toFixed(2)+'%';
-                document.getElementById('tRec').innerText = (rec*100).toFixed(2)+'%';
-                document.getElementById('tF1').innerText = (f1*100).toFixed(2)+'%';
-                document.getElementById('cAcc').innerText = (acc*100).toFixed(2)+'%';
-                
-                drawChart('chartAcc', {
-                    type:'doughnut',
-                    data: { datasets:[{ data:[acc, 1-acc], backgroundColor:['#4db85f','#e0e0e0'] }] },
-                    options: { rotation: -180, cutout:'75%', plugins:{tooltip:{enabled:false}} }
-                });
-                
-                // CM Panel
-                document.getElementById('cmTP').innerText = TP;
-                document.getElementById('cmTN').innerText = TN;
-                document.getElementById('cmFP').innerText = FP;
-                document.getElementById('cmFN').innerText = FN;
-                document.getElementById('mTP').innerText = TP;
-                document.getElementById('mTN').innerText = TN;
-                document.getElementById('mFP').innerText = FP;
-                document.getElementById('mFN').innerText = FN;
-                document.getElementById('cmTotal').innerText = tSize;
-                
-                // ROC calculation
-                pts.sort((a,b)=>b.p - a.p);
-                let roc = [{x:0,y:0}];
-                let cTP=0, cFP=0;
-                let totP = TP+FN, totN = TN+FP;
-                let auc = 0;
-                for(let p of pts) {
-                    if(p.t===1) cTP++; else cFP++;
-                    roc.push({x: cFP/totN, y: cTP/totP});
-                }
-                for(let i=1; i<roc.length; i++) auc += (roc[i].x-roc[i-1].x)*(roc[i].y+roc[i-1].y)/2;
-                
-                drawChart('chartRoc', {
-                    type: 'line',
-                    data: {
-                        datasets:[
-                            { label:`ROC Curve (AUC = ${auc.toFixed(2)})`, data:roc, borderColor:'#3366cc', borderWidth:2, pointRadius:0 },
-                            { label:'', data:[{x:0,y:0},{x:1,y:1}], borderColor:'#e34a4d', borderDash:[5,5], pointRadius:0 }
-                        ]
-                    },
-                    options: { scales:{ x:{title:{display:true, text:'False Positive Rate'}}, y:{title:{display:true, text:'True Positive Rate (Recall)'}} } }
-                });
-                
-                // Feature Importance
-                let sortedF = featNames.map((n,i)=>({n, v:rf.featureImportances[i]})).sort((a,b)=>b.v - a.v).slice(0, 10);
-                drawChart('chartFeat', {
-                    type:'bar',
-                    data: { labels:sortedF.map(f=>f.n), datasets:[{ label: 'Importance Score', data:sortedF.map(f=>f.v), backgroundColor:'#3366cc' }] },
-                    options: { indexAxis:'y', plugins:{legend:{display:false}}, scales:{ x:{title:{display:true, text:'Importance Score'}} } }
-                });
-                
-                // Dist
-                let dpNotChurn = ((totN/tSize)*100).toFixed(1);
-                let dpChurn = ((totP/tSize)*100).toFixed(1);
-                document.getElementById('dpNotChurn').innerText = dpNotChurn + '%';
-                document.getElementById('dcNotChurn').innerText = `(${totN})`;
-                document.getElementById('dpChurn').innerText = dpChurn + '%';
-                document.getElementById('dcChurn').innerText = `(${totP})`;
-                document.getElementById('dTotal').innerText = tSize;
-                
-                drawChart('chartDist', {
-                    type: 'doughnut',
-                    data: { labels:['Not Churn','Churn'], datasets:[{ data:[totN, totP], backgroundColor:['#4db85f','#e34a4d'], borderWidth:2 }] },
-                    options: { cutout: '65%', plugins:{legend:{display:false}} }
-                });
-                
-                // Act vs Pred
-                let tYP = 0;
-                for(let p of yPred) if(p===1) tYP++;
-                
-                drawChart('chartAvP', {
-                    type: 'bar',
-                    data: {
-                        labels: ['Not Churn', 'Churn'],
-                        datasets:[
-                            { label:'Actual', data:[totN, totP], backgroundColor: '#3366cc' },
-                            { label:'Predicted', data:[tSize-tYP, tYP], backgroundColor: '#e34a4d' }
-                        ]
-                    },
-                    options: { scales:{ y:{title:{display:true,text:'Count'}} } }
-                });
-                
-                // Top Risk Table (Getting top 4 features from the generic importance array)
-                const fcols = sortedF.slice(0,4);
-                document.getElementById('th2').innerText = fcols[0]?fcols[0].n:'Feat 1';
-                document.getElementById('th3').innerText = fcols[1]?fcols[1].n:'Feat 2';
-                document.getElementById('th4').innerText = fcols[2]?fcols[2].n:'Feat 3';
-                document.getElementById('th5').innerText = fcols[3]?fcols[3].n:'Feat 4';
-                
-                let rTblData = tInd.map((v,i) => ({ idx: validIndices[v], prob: yProba[i] })).sort((a,b)=>b.prob-a.prob).slice(0,10);
-                let tbody = document.querySelector('#riskTable tbody');
-                tbody.innerHTML = '';
-                rTblData.forEach(r => {
-                    let obj = res.data[r.idx];
-                    let idCol = Object.keys(obj).find(c=>c.toLowerCase().includes('id'));
-                    let idVal = idCol ? obj[idCol] : 'Row '+(r.idx+1);
-                    
-                    let tr = `<tr>
-                        <td>${idVal}</td>
-                        <td>${fcols[0]?obj[fcols[0].n]||'-':'-'}</td>
-                        <td>${fcols[1]?obj[fcols[1].n]||'-':'-'}</td>
-                        <td>${fcols[2]?obj[fcols[2].n]||'-':'-'}</td>
-                        <td>${fcols[3]?obj[fcols[3].n]||'-':'-'}</td>
-                        <td>${r.prob.toFixed(2)}</td>
-                        <td style="color:var(--red); font-weight:bold;">Churn</td>
-                    </tr>`;
-                    tbody.innerHTML += tr;
-                });
-                
-                // Prob Dist
-                let bins = [0,0,0,0,0];
-                for(let p of yProba) bins[Math.min(4, Math.floor(p*5))]++;
-                
-                drawChart('chartProb', {
-                    type: 'bar',
-                    data: {
-                        labels: ['0 - 0.2','0.2 - 0.4','0.4 - 0.6','0.6 - 0.8','0.8 - 1.0'],
-                        datasets:[{ label:'Customers', data:bins, backgroundColor:'#956bba' }]
-                    },
-                    options: {
-                        plugins: { legend:{display:false} },
-                        scales: { y:{title:{display:true, text:'Number of Customers'}}, x:{title:{display:true, text:'Churn Probability'}} }
-                    }
-                });
+    const formData = new FormData();
+    formData.append('file', file);
 
-                document.getElementById('conclusionDiv').innerHTML = `<strong>Conclusion:</strong> The model performs well with <strong>${(acc*100).toFixed(2)}% accuracy</strong>. It can effectively identify customers who are likely to churn based on contract and billing factors.`;
+    try {
+        console.log("Sending file to /predict...");
+        const response = await fetch('/predict', {
+            method: 'POST',
+            body: formData
+        });
 
-                // Display UI 
-                document.getElementById('overlay').classList.add('hidden');
-                document.getElementById('dashboard').classList.remove('hidden');
-                document.getElementById('loader').style.display = 'none';
-
-            } catch(ex) {
-                console.error(ex);
-                document.getElementById('errorMsg').innerText = "Process Error: " + ex.message;
-                document.getElementById('loader').style.display = 'none';
-            }
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || "Unknown server error");
         }
-    });
+
+        console.log("Received data from backend!", data);
+
+        // Acc panel
+        document.getElementById('tAcc').innerText = (data.metrics.acc * 100).toFixed(2) + '%';
+        document.getElementById('tPrec').innerText = (data.metrics.prec * 100).toFixed(2) + '%';
+        document.getElementById('tRec').innerText = (data.metrics.rec * 100).toFixed(2) + '%';
+        document.getElementById('tF1').innerText = (data.metrics.f1 * 100).toFixed(2) + '%';
+        document.getElementById('cAcc').innerText = (data.metrics.acc * 100).toFixed(2) + '%';
+        
+        drawChart('chartAcc', {
+            type:'doughnut',
+            data: { datasets:[{ data:[data.metrics.acc, 1-data.metrics.acc], backgroundColor:['#4db85f','#e0e0e0'] }] },
+            options: { rotation: -180, cutout:'75%', plugins:{tooltip:{enabled:false}} }
+        });
+
+        // CM Panel
+        document.getElementById('cmTP').innerText = data.cm.tp;
+        document.getElementById('cmTN').innerText = data.cm.tn;
+        document.getElementById('cmFP').innerText = data.cm.fp;
+        document.getElementById('cmFN').innerText = data.cm.fn;
+        document.getElementById('mTP').innerText = data.cm.tp;
+        document.getElementById('mTN').innerText = data.cm.tn;
+        document.getElementById('mFP').innerText = data.cm.fp;
+        document.getElementById('mFN').innerText = data.cm.fn;
+        document.getElementById('cmTotal').innerText = data.dist.total;
+
+        // ROC
+        drawChart('chartRoc', {
+            type: 'line',
+            data: {
+                datasets:[
+                    { label:`ROC Curve (AUC = ${data.roc.auc.toFixed(2)})`, data: data.roc.data, borderColor:'#3366cc', borderWidth:2, pointRadius:0 },
+                    { label:'', data:[{x:0,y:0},{x:1,y:1}], borderColor:'#e34a4d', borderDash:[5,5], pointRadius:0 }
+                ]
+            },
+            options: { scales:{ x:{title:{display:true, text:'False Positive Rate'}}, y:{title:{display:true, text:'True Positive Rate (Recall)'}} } }
+        });
+
+        // Feature Importance
+        drawChart('chartFeat', {
+            type:'bar',
+            data: { labels: data.features.map(f => f.name), datasets:[{ label: 'Importance Score', data: data.features.map(f => f.value), backgroundColor:'#3366cc' }] },
+            options: { indexAxis:'y', plugins:{legend:{display:false}}, scales:{ x:{title:{display:true, text:'Importance Score'}} } }
+        });
+
+        // Dist
+        let dpNotChurn = ((data.cm.tn + data.cm.fp) / data.dist.total * 100).toFixed(1);
+        let dpChurn = ((data.cm.tp + data.cm.fn) / data.dist.total * 100).toFixed(1);
+        document.getElementById('dpNotChurn').innerText = dpNotChurn + '%';
+        document.getElementById('dcNotChurn').innerText = `(${data.cm.tn + data.cm.fp})`;
+        document.getElementById('dpChurn').innerText = dpChurn + '%';
+        document.getElementById('dcChurn').innerText = `(${data.cm.tp + data.cm.fn})`;
+        document.getElementById('dTotal').innerText = data.dist.total;
+
+        drawChart('chartDist', {
+            type: 'doughnut',
+            data: { labels:['Not Churn','Churn'], datasets:[{ data:[data.dist.not_churn, data.dist.churn], backgroundColor:['#4db85f','#e34a4d'], borderWidth:2 }] },
+            options: { cutout: '65%', plugins:{legend:{display:false}} }
+        });
+
+        // Act vs Pred
+        drawChart('chartAvP', {
+            type: 'bar',
+            data: {
+                labels: ['Not Churn', 'Churn'],
+                datasets:[
+                    { label:'Actual', data:[data.cm.tn + data.cm.fp, data.cm.tp + data.cm.fn], backgroundColor: '#3366cc' },
+                    { label:'Predicted', data:[data.dist.not_churn, data.dist.churn], backgroundColor: '#e34a4d' }
+                ]
+            },
+            options: { scales:{ y:{title:{display:true,text:'Count'}} } }
+        });
+
+        // Top Risk
+        document.getElementById('th2').innerText = data.features[0] ? data.features[0].name : 'Feat 1';
+        document.getElementById('th3').innerText = data.features[1] ? data.features[1].name : 'Feat 2';
+        document.getElementById('th4').innerText = data.features[2] ? data.features[2].name : 'Feat 3';
+        document.getElementById('th5').innerText = data.features[3] ? data.features[3].name : 'Feat 4';
+        
+        let tbody = document.querySelector('#riskTable tbody');
+        tbody.innerHTML = '';
+        data.risk_table.forEach(r => {
+            tbody.innerHTML += `<tr>
+                <td>${r.id}</td>
+                <td>${r.F1}</td>
+                <td>${r.F2}</td>
+                <td>${r.F3}</td>
+                <td>${r.F4}</td>
+                <td>${r.prob.toFixed(2)}</td>
+                <td style="color:var(--red); font-weight:bold;">Churn</td>
+            </tr>`;
+        });
+
+        // Prob Dist
+        drawChart('chartProb', {
+            type: 'bar',
+            data: {
+                labels: ['0 - 0.2','0.2 - 0.4','0.4 - 0.6','0.6 - 0.8','0.8 - 1.0'],
+                datasets:[{ label:'Customers', data: data.prob_bins, backgroundColor:'#956bba' }]
+            },
+            options: {
+                plugins: { legend:{display:false} },
+                scales: { y:{title:{display:true, text:'Number of Customers'}}, x:{title:{display:true, text:'Churn Probability'}} }
+            }
+        });
+
+        document.getElementById('conclusionDiv').innerHTML = `<strong>Conclusion:</strong> The model performs well with <strong>${(data.metrics.acc * 100).toFixed(2)}% accuracy</strong>. It can effectively identify customers who are likely to churn.`;
+
+        // Display UI 
+        document.getElementById('overlay').classList.add('hidden');
+        document.getElementById('dashboard').classList.remove('hidden');
+        document.getElementById('loader').style.display = 'none';
+
+    } catch(ex) {
+        console.error(ex);
+        alert("Client Error: " + ex.message);
+        document.getElementById('errorMsg').innerText = "Process Error: " + ex.message;
+        document.getElementById('loader').style.display = 'none';
+        document.getElementById('overlay').classList.remove('hidden');
+    }
+}
+
+dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.style.background = '#eef2f5';
+});
+dropZone.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    dropZone.style.background = '#fdfdfd';
+});
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.style.background = '#fdfdfd';
+    if(e.dataTransfer.files.length) {
+        processFile(e.dataTransfer.files[0]);
+    }
+});
+
+fileInput.addEventListener('change', (e) => {
+    if(e.target.files.length) {
+        processFile(e.target.files[0]);
+    }
 });
 </script>
 </body>
