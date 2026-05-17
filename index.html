@@ -336,8 +336,8 @@ async function processFile(file) {
     formData.append('file', file);
 
     try {
-        console.log("Sending file to /predict...");
-        const response = await fetch('/predict', {
+        console.log("Sending file to /api/predict...");
+        const response = await fetch('/api/predict', {
             method: 'POST',
             body: formData
         });

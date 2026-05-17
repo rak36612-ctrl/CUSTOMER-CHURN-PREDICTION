@@ -15,6 +15,8 @@ def serve_index():
     return send_file('index.html')
 
 @app.route('/predict', methods=['POST'])
+@app.route('/api/predict', methods=['POST'])
+@app.route('/', methods=['POST'])
 def predict():
     if 'file' not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
