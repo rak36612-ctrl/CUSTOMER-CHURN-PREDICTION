@@ -6,6 +6,7 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_curve, auc
+from pandas.api.types import is_object_dtype, is_string_dtype, is_categorical_dtype
 
 app = Flask(__name__)
 CORS(app)
@@ -40,10 +41,33 @@ def predict():
         
         # Map target to 0/1
         target_map = {"yes": 1, "no": 0, "true": 1, "false": 0, "1": 1, "0": 0}
-        
-        # Safely convert target to strings/lowercase if applicable, then map
-        if df[target_col].dtype == object or df[target_col].dtype == str:
-            df[target_col] = df[target_col].astype(str).str.lower().str.strip().map(target_map).fillna(0).astype(int)
+
+        # Normalize target labels to 0/1 with validation
+        if is_object_dtype(df[target_col]) or is_string_dtype(df[target_col]) or is_categorical_dtype(df[target_col]):
+            mapped = df[target_col].astype(str).str.lower().str.strip().map(target_map)
+            if mapped.isna().any():
+                bad_vals = sorted(set(df[target_col].astype(str).unique()))
+                return jsonify({
+                    "error": "Invalid target labels. Use Yes/No, True/False, or 0/1.",
+                    "details": {"unique_labels": bad_vals}
+                }), 400
+            df[target_col] = mapped.astype(int)
+        else:
+            y_num = pd.to_numeric(df[target_col], errors='coerce')
+            if y_num.isna().any():
+                return jsonify({"error": "Target column must be numeric or Yes/No."}), 400
+            unique_vals = sorted(set(y_num.unique()))
+            if set(unique_vals) == {0, 1}:
+                df[target_col] = y_num.astype(int)
+            elif set(unique_vals) == {-1, 1}:
+                df[target_col] = (y_num == 1).astype(int)
+            elif set(unique_vals) == {1, 2}:
+                df[target_col] = (y_num - 1).astype(int)
+            else:
+                return jsonify({
+                    "error": "Target column must be binary (0/1) or Yes/No.",
+                    "details": {"unique_labels": unique_vals}
+                }), 400
             
         # Encode categorical variables robustly
         df_feats = df[features].copy()
